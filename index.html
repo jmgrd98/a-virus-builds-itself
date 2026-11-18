@@ -1,0 +1,701 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>A virus builds itself</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+html,body{margin:0;height:100%;background:#06080b;overflow:hidden;color:#dfe6ea;font-family:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased}
+canvas{position:fixed;inset:0;width:100vw;height:100vh;display:block;cursor:grab;touch-action:none}
+canvas.drag{cursor:grabbing}
+#head{position:fixed;left:28px;top:22px;pointer-events:none;text-shadow:0 1px 8px rgba(0,0,0,.7)}
+#head h1{margin:0;font-weight:500;font-size:15px;letter-spacing:.02em;color:#eef2f4}
+#head p{margin:5px 0 0;font:400 11.5px "IBM Plex Mono",ui-monospace,monospace;color:#8d9aa3;letter-spacing:.01em}
+#labels{position:fixed;inset:0;pointer-events:none;overflow:hidden}
+.lb{position:absolute;left:0;top:0;white-space:nowrap;font:500 11.5px "IBM Plex Mono",ui-monospace,monospace;color:#e6edf0;opacity:0;transition:opacity .45s;text-shadow:0 1px 6px rgba(0,0,0,.9),0 0 2px rgba(0,0,0,.8)}
+.lb i{position:absolute;top:0;height:1px;width:52px;background:linear-gradient(90deg,rgba(230,238,242,.75),rgba(230,238,242,.3))}
+.lb b{position:absolute;left:-2.5px;top:-2.5px;width:5px;height:5px;border-radius:50%;background:#fff;box-shadow:0 0 0 3px rgba(255,255,255,.14)}
+.lb span{position:absolute;top:-8px}
+.lb.r i{left:0}.lb.r span{left:60px}
+.lb.l i{right:0;transform:scaleX(-1)}.lb.l span{right:60px}
+body::after{content:'';position:fixed;left:0;right:0;bottom:0;height:230px;pointer-events:none;background:linear-gradient(0deg,rgba(3,5,8,.82),rgba(3,5,8,.5) 45%,rgba(3,5,8,0))}
+#foot{z-index:2;position:fixed;left:28px;right:28px;bottom:20px;user-select:none;-webkit-user-select:none}
+#cap{max-width:620px;margin-bottom:16px;pointer-events:none;text-shadow:0 1px 8px rgba(0,0,0,.8)}
+#cap strong{display:block;font-weight:500;font-size:19px;letter-spacing:.005em;color:#f1f4f5;margin-bottom:4px}
+#cap span{font-weight:300;font-size:13.5px;line-height:1.45;color:#b4c0c7}
+#row{display:flex;align-items:flex-end;gap:18px}
+#bar{flex:1;position:relative;height:38px;cursor:pointer;touch-action:none}
+#track{position:absolute;left:0;right:0;top:9px;height:2px;background:rgba(200,215,225,.16);border-radius:2px}
+#fill{position:absolute;left:0;top:0;height:2px;width:0;background:#e9b872;border-radius:2px}
+#knob{position:absolute;top:4px;width:12px;height:12px;margin-left:-6px;border-radius:50%;background:#f4d6a4;box-shadow:0 0 12px rgba(240,180,100,.55)}
+.tk{position:absolute;top:5px;width:1px;height:10px;background:rgba(200,215,225,.35)}
+.tn{position:absolute;top:21px;font:400 10px "IBM Plex Mono",ui-monospace,monospace;color:#77848d;white-space:nowrap;transition:color .3s}
+.tn.on{color:#f0d3a2}
+#btns{display:flex;gap:8px;padding-bottom:10px}
+button{font:500 11.5px "IBM Plex Mono",ui-monospace,monospace;color:#cfd8dd;background:rgba(18,24,30,.55);border:1px solid rgba(200,215,225,.22);border-radius:999px;padding:7px 13px;cursor:pointer;backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);transition:background .2s,border-color .2s,color .2s}
+button:hover{background:rgba(40,50,60,.7);border-color:rgba(230,238,242,.5);color:#fff}
+button.on{color:#f0d3a2;border-color:rgba(233,184,114,.55)}
+#err{position:fixed;inset:0;display:none;align-items:center;justify-content:center;font-size:15px;color:#b4c0c7}
+@media (max-width:820px){.tn{display:none}#cap strong{font-size:16px}#cap span{font-size:12.5px}}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="labels"></div>
+<div id="head"><h1>A virus builds itself</h1><p>Bacteriophage T4 · drag to orbit, scroll to zoom, space to pause</p></div>
+<div id="foot">
+  <div id="cap"><strong></strong><span></span></div>
+  <div id="row">
+    <div id="bar"><div id="track"><div id="fill"></div></div><div id="knob"></div></div>
+    <div id="btns"><button id="bPlay">Pause</button><button id="bLab" class="on">Labels on</button><button id="bSnd">Enable sound</button></div>
+  </div>
+</div>
+<div id="err">This page needs WebGL2.</div>
+<script>
+'use strict';
+// ───────────────────────── parameters
+const QS = new URLSearchParams(location.search);
+const FREEZE = QS.has('t') ? parseFloat(QS.get('t')) : null;
+const VIEW = QS.get('view') || 'auto';
+const DUR = 46;
+const RC = 500;                 // cell radius, nm
+const ASM_Y = 640;              // height of the assembly spot above the cell
+const TAU = Math.PI * 2;
+
+// ───────────────────────── small maths
+const cl = (x, a = 0, b = 1) => x < a ? a : x > b ? b : x;
+const mix = (a, b, t) => a + (b - a) * t;
+const ss = (a, b, x) => { const t = cl((x - a) / (b - a)); return t * t * (3 - 2 * t); };
+const ease = u => u < .5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) / 2;
+const add = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+const mul = (a, s) => [a[0] * s, a[1] * s, a[2] * s];
+const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+const len = a => Math.hypot(a[0], a[1], a[2]);
+const nrm = a => { const l = len(a) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
+const lerp3 = (a, b, t) => [mix(a[0], b[0], t), mix(a[1], b[1], t), mix(a[2], b[2], t)];
+const qMul = (a, b) => [a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1], a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0], a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3], a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2]];
+const qAxis = (ax, ang) => { const s = Math.sin(ang / 2); return [ax[0] * s, ax[1] * s, ax[2] * s, Math.cos(ang / 2)]; };
+const qConj = q => [-q[0], -q[1], -q[2], q[3]];
+const qRot = (q, v) => { const x = q[0], y = q[1], z = q[2], w = q[3]; const cx = y * v[2] - z * v[1] + w * v[0], cy = z * v[0] - x * v[2] + w * v[1], cz = x * v[1] - y * v[0] + w * v[2]; return [v[0] + 2 * (y * cz - z * cy), v[1] + 2 * (z * cx - x * cz), v[2] + 2 * (x * cy - y * cx)]; };
+function qBasis(X, Y, Z) {
+  const m00 = X[0], m10 = X[1], m20 = X[2], m01 = Y[0], m11 = Y[1], m21 = Y[2], m02 = Z[0], m12 = Z[1], m22 = Z[2];
+  const tr = m00 + m11 + m22; let s;
+  if (tr > 0) { s = Math.sqrt(tr + 1) * 2; return [(m21 - m12) / s, (m02 - m20) / s, (m10 - m01) / s, s / 4]; }
+  if (m00 > m11 && m00 > m22) { s = Math.sqrt(1 + m00 - m11 - m22) * 2; return [s / 4, (m01 + m10) / s, (m02 + m20) / s, (m21 - m12) / s]; }
+  if (m11 > m22) { s = Math.sqrt(1 + m11 - m00 - m22) * 2; return [(m01 + m10) / s, s / 4, (m12 + m21) / s, (m02 - m20) / s]; }
+  s = Math.sqrt(1 + m22 - m00 - m11) * 2; return [(m02 + m20) / s, (m12 + m21) / s, s / 4, (m10 - m01) / s];
+}
+// quaternion whose local Y is `y` and local X is as close to `hint` as possible
+function qFrameY(y, hint) { let X = sub(hint, mul(y, dot(hint, y))); if (len(X) < 1e-4) X = Math.abs(y[1]) < .9 ? cross([0, 1, 0], y) : [1, 0, 0]; X = nrm(X); return qBasis(X, y, cross(X, y)); }
+let seed = 20261111;
+const rnd = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
+const rndDir = () => { const z = rnd() * 2 - 1, a = rnd() * TAU, r = Math.sqrt(1 - z * z); return [r * Math.cos(a), z, r * Math.sin(a)]; };
+// matrices, column major
+function persp(fovy, asp, n, f) { const t = 1 / Math.tan(fovy / 2); return new Float32Array([t / asp, 0, 0, 0, 0, t, 0, 0, 0, 0, (f + n) / (n - f), -1, 0, 0, 2 * f * n / (n - f), 0]); }
+function ortho(l, r, b, t, n, f) { return new Float32Array([2 / (r - l), 0, 0, 0, 0, 2 / (t - b), 0, 0, 0, 0, -2 / (f - n), 0, -(r + l) / (r - l), -(t + b) / (t - b), -(f + n) / (f - n), 1]); }
+function lookAt(e, c, u) { const z = nrm(sub(e, c)), x = nrm(cross(u, z)), y = cross(z, x); return new Float32Array([x[0], y[0], z[0], 0, x[1], y[1], z[1], 0, x[2], y[2], z[2], 0, -dot(x, e), -dot(y, e), -dot(z, e), 1]); }
+function mmul(a, b) { const o = new Float32Array(16); for (let c = 0; c < 4; c++)for (let r = 0; r < 4; r++) { let s = 0; for (let k = 0; k < 4; k++)s += a[k * 4 + r] * b[c * 4 + k]; o[c * 4 + r] = s; } return o; }
+function mFromQT(q, p) { const x = q[0], y = q[1], z = q[2], w = q[3]; return new Float32Array([1 - 2 * (y * y + z * z), 2 * (x * y + z * w), 2 * (x * z - y * w), 0, 2 * (x * y - z * w), 1 - 2 * (x * x + z * z), 2 * (y * z + x * w), 0, 2 * (x * z + y * w), 2 * (y * z - x * w), 1 - 2 * (x * x + y * y), 0, p[0], p[1], p[2], 1]); }
+
+// ───────────────────────── the parts
+// Every protein subunit is one bead. A bead knows where it docks (statically in
+// the head frame, or through a closure for the moving parts) and when.
+const beads = [];
+let hp = [0, 0, 0], hq = [0, 0, 0, 1], hs = null;   // scratch output of closures
+let ST = null;                                       // per-frame state
+function bead(o) {
+  const c = o.cloud || [45, ASM_Y + 105, 0], r0 = o.r0 || 230, r1 = o.r1 || 150;
+  const ya = .55 + cl(o.td, 0, 20) * .045, cd = [Math.sin(ya), .12, Math.cos(ya)]; let d = rndDir();
+  for (let k = 0; k < 30 && dot(d, cd) > .2; k++) d = rndDir(); d[1] *= .8;
+  o.S = add(c, mul(d, r0 + r1 * rnd()));
+  o.sq = qAxis(rndDir(), rnd() * TAU); o.sw = mul(rndDir(), 16 + 22 * rnd()); o.ph = rnd() * TAU;
+  o.fl = o.fl || 1.5; o.tl = o.tl || 1e9; o.ao = o.ao === undefined ? 1 : o.ao;
+  beads.push(o); return o;
+}
+
+// Head: prolate icosahedron, triangulation T = 13 on the caps, Q = 20 on the midsection.
+const U = 14;                    // nm between neighbouring capsomers
+const HEAD = (() => {
+  const a = Math.sqrt(13), R = a / (2 * Math.sin(Math.PI / 5)), hc = Math.sqrt(13 - R * R);
+  const phi = Math.PI / 5 + Math.asin((3 / (2 * R * R)) / (2 * Math.sin(Math.PI / 5)));
+  const H = Math.sqrt(28 - 2 * R * R * (1 - Math.cos(phi)));
+  const V = [[0, 0, 0]];
+  for (let i = 0; i < 5; i++)V.push([R * Math.cos(i * TAU / 5), hc, R * Math.sin(i * TAU / 5)]);
+  for (let i = 0; i < 5; i++)V.push([R * Math.cos(i * TAU / 5 + phi), hc + H, R * Math.sin(i * TAU / 5 + phi)]);
+  V.push([0, 2 * hc + H, 0]);
+  const L = (2 * hc + H) * U, cen = [0, (2 * hc + H) / 2, 0];
+  const faces = [];
+  for (let n = 0; n < 5; n++) {
+    const m = (n + 1) % 5;
+    faces.push([[1 + n, 1 + m, 0], [[0, 0], [3, 1], [4, -3]]]);
+    faces.push([[1 + n, 1 + m, 6 + n], [[0, 0], [3, 1], [-2, 6]]]);
+    faces.push([[6 + n, 1 + m, 6 + m], [[-2, 6], [3, 1], [1, 7]]]);
+    faces.push([[6 + n, 6 + m, 11], [[-2, 6], [1, 7], [-3, 10]]]);
+  }
+  const cart = (i, j) => [i + j / 2, j * 0.8660254038];
+  const planes = [], caps = [];
+  for (const [vi, lt] of faces) {
+    const A = V[vi[0]], B = V[vi[1]], C = V[vi[2]];
+    let n = nrm(cross(sub(B, A), sub(C, A))); if (dot(n, sub(A, cen)) < 0) n = mul(n, -1);
+    planes.push({ n, d: dot(n, A) * U });
+    const a2 = cart(...lt[0]), b2 = cart(...lt[1]), c2 = cart(...lt[2]);
+    const det = (b2[0] - a2[0]) * (c2[1] - a2[1]) - (c2[0] - a2[0]) * (b2[1] - a2[1]);
+    const bary = p => { const w1 = ((p[0] - a2[0]) * (c2[1] - a2[1]) - (c2[0] - a2[0]) * (p[1] - a2[1])) / det, w2 = ((b2[0] - a2[0]) * (p[1] - a2[1]) - (p[0] - a2[0]) * (b2[1] - a2[1])) / det; return [1 - w1 - w2, w1, w2]; };
+    const map = w => [0, 1, 2].map(k => w[0] * A[k] + w[1] * B[k] + w[2] * C[k]);
+    const is = lt.map(l => l[0]), js = lt.map(l => l[1]);
+    for (let i = Math.min(...is) - 1; i <= Math.max(...is) + 1; i++)for (let j = Math.min(...js) - 1; j <= Math.max(...js) + 1; j++) {
+      const w = bary(cart(i, j)); if (Math.min(...w) < -1e-6) continue;
+      const p = map(w); if (caps.some(c => len(sub(c.p, p)) < .05)) continue;
+      const u = nrm(sub(map(bary(cart(i + 1, j))), p));
+      caps.push({ p, n, u, vert: Math.max(...w) > .999 });
+    }
+  }
+  const project = s => { for (let it = 0; it < 4; it++)for (const pl of planes) { const e = dot(pl.n, s) - pl.d; if (e > 0) s = sub(s, mul(pl.n, e)); } return s; };
+  const smoothN = s => { let n = [0, 0, 0]; for (const pl of planes) n = add(n, mul(pl.n, Math.exp((dot(pl.n, s) - pl.d) / 3.2))); return nrm(n); };
+  let nHex = 0, nPen = 0; const subs = [];
+  for (const c of caps) {
+    const P = mul(c.p, U);
+    if (c.vert && c.p[1] < .01) continue;                 // the portal vertex
+    const n = c.vert ? nrm(sub(c.p, cen)) : c.n;
+    const u = c.vert ? nrm(cross(n, [.3, .1, .9])) : c.u, v = cross(n, u);
+    const k = c.vert ? 5 : 6, rad = c.vert ? 3.6 : 4.1; c.vert ? nPen++ : nHex++;
+    const tint = .86 + .22 * rnd();
+    for (let s = 0; s < k; s++) {
+      const ang = (s + .5) * TAU / k, dir = add(mul(u, Math.cos(ang)), mul(v, Math.sin(ang)));
+      let p = project(add(P, mul(dir, rad))); const N = smoothN(p); p = add(p, mul(N, c.vert ? 1.4 : .5));
+      const X0 = nrm(sub(dir, mul(N, dot(dir, N)))), Y = nrm(add(mul(N, .92), mul(X0, .39))), X = nrm(sub(X0, mul(Y, dot(X0, Y))));
+      subs.push({ p, q: qBasis(X, Y, cross(X, Y)), sc: c.vert ? [3.0, 3.0, 2.7] : [3.25, 2.7, 2.75], col: c.vert ? [.84 * tint, .66 * tint, .44 * tint] : [.66 * tint, .71 * tint, .78 * tint] });
+    }
+  }
+  console.log('capsid: hexamers', nHex, 'pentamers', nPen, 'subunits', subs.length, 'length nm', L.toFixed(1), 'width nm', (2 * R * U).toFixed(1));
+  return { subs, L, R: R * U, hcap: hc * U };
+})();
+const RISE0 = 4.06, RISE1 = 1.8, TW0 = 0.3002, TW1 = 0.574, NR = 23;
+const YS0 = 2 + NR * RISE0;       // top of the extended sheath in the tail frame
+
+// capsid subunits (head frame), first in the buffer so they can be drawn as a ghost
+for (const s of HEAD.subs) bead({ fr: 1, lp: s.p, lq: s.q, sc: s.sc, col: s.col, td: .35 + 6.5 * (s.p[1] / HEAD.L) + rnd() * .5 });
+const N_HEAD = beads.length;
+// portal: a ring of twelve at the one vertex without a pentamer
+for (let j = 0; j < 12; j++) { const a = j * TAU / 12, e = [Math.cos(a), 0, Math.sin(a)]; bead({ fr: 1, lp: [e[0] * 5.6, 1.6, e[2] * 5.6], lq: qBasis(e, [0, 1, 0], cross(e, [0, 1, 0])), sc: [2.9, 3.4, 2.2], col: [.78, .60, .44], td: -.3 + j * .05, fl: 1.0, ao: .4, r0: 150, r1: 120 }); }
+// packaging motor: five subunits under the portal, present only while the DNA goes in
+for (let j = 0; j < 5; j++) { const a = j * TAU / 5, e = [Math.cos(a), 0, Math.sin(a)]; bead({ fr: 1, lp: [e[0] * 7.2, -5.2, e[2] * 7.2], lq: qBasis(e, [0, 1, 0], cross(e, [0, 1, 0])), sc: [4.2, 5.0, 4.0], col: [.80, .50, .24], td: 7.7 + j * .07, tl: 13.45 + j * .05, fl: 1.2, ao: .3, cloud: [150, ASM_Y + 60, 10], r0: 120, r1: 80 }); }
+// neck (two rings of six), collar and six whiskers
+for (let r = 0; r < 2; r++)for (let j = 0; j < 6; j++) { const a = j * TAU / 6 + r * .52, e = [Math.cos(a), 0, Math.sin(a)]; bead({ fr: 1, lp: [e[0] * 5.4, -2.6 - r * 4.6, e[2] * 5.4], lq: qBasis(e, [0, 1, 0], cross(e, [0, 1, 0])), sc: [3.3, 2.9, 3.4], col: [.72, .70, .66], td: 13.9 + r * .15 + j * .03, fl: 1.0, ao: .4, cloud: [150, ASM_Y + 60, 10], r0: 120, r1: 80 }); }
+for (let j = 0; j < 12; j++) { const a = j * TAU / 12, e = [Math.cos(a), 0, Math.sin(a)]; bead({ fr: 1, lp: [e[0] * 9.6, -5.2, e[2] * 9.6], lq: qBasis(e, [0, 1, 0], cross(e, [0, 1, 0])), sc: [3.6, 1.7, 3.0], col: [.80, .77, .70], td: 14.2 + j * .03, fl: 1.0, ao: .4, cloud: [150, ASM_Y + 60, 10], r0: 120, r1: 80 }); }
+for (let j = 0; j < 6; j++)for (let k = 0; k < 6; k++) { const a = j * TAU / 6 + .26, e = [Math.cos(a), 0, Math.sin(a)], dir = nrm([e[0], -.28 - k * .05, e[2]]), r = 13.5 + k * 4.6; bead({ fr: 1, lp: [e[0] * r, -5.6 - k * 1.5 - k * k * .12, e[2] * r], lq: qFrameY(dir, [0, 1, 0]), sc: [1.25, 2.9, 1.25], col: [.84, .82, .76], td: 14.45 + j * .05 + k * .05, fl: .9, ao: 0, cloud: [150, ASM_Y + 60, 10], r0: 120, r1: 80 }); }
+
+// baseplate: hub, six wedges, six short tail fibres folded underneath
+const TAILC = { cloud: [-40, ASM_Y + 40, 0], r0: 200, r1: 150 };
+bead({ ...TAILC, f() { hp = [0, -4.6, 0]; hq = [0, 0, 0, 1]; }, sc: [7.6, 4.3, 7.6], col: [.56, .47, .38], td: -.2, ao: .5 });
+for (let i = 0; i < 6; i++) {
+  const a = i * TAU / 6, e = [Math.cos(a), 0, Math.sin(a)], tg = [-Math.sin(a), 0, Math.cos(a)], q0 = qBasis(e, [0, 1, 0], cross(e, [0, 1, 0]));
+  const t0 = .1 + i * .28;
+  bead({ ...TAILC, f() { hp = [e[0] * 12, -3.4, e[2] * 12]; hq = q0; }, sc: [5.6, 4.3, 6.2], col: [.64, .53, .42], td: t0, ao: .5 });
+  bead({ ...TAILC, f() { const b = ST.b, r = mix(20.5, 27, b); hp = [e[0] * r, mix(-4.6, -6.2, b), e[2] * r]; hq = q0; hs = [5.6, mix(4.5, 3.1, b), 6.6]; }, sc: [5.6, 4.5, 6.6], col: [.60, .50, .40], td: t0 + .1, ao: .5 });
+  bead({ ...TAILC, f() { const b = ST.b, r = mix(26.5, 34.5, b); hp = [e[0] * r, mix(-6.4, -7.2, b), e[2] * r]; hq = q0; }, sc: [3.7, 3.4, 3.7], col: [.72, .64, .52], td: t0 + .2, ao: .5 });
+  for (let k = 0; k < 2; k++)bead({ ...TAILC, f() { const b = ST.b, r = mix(26.5, 34.5, b); const dir = nrm(lerp3(tg, [e[0] * .25, -1, e[2] * .25], b)); const o = 3.4 + k * 6.2; hp = [e[0] * (r - 3 * (1 - b)) + dir[0] * o, mix(-9.2, -8, b) + dir[1] * o, e[2] * (r - 3 * (1 - b)) + dir[2] * o]; hq = qFrameY(dir, e); }, sc: [1.5, 3.4, 1.5], col: [.80, .74, .62], td: t0 + .3 + k * .05, ao: 0 });
+}
+// inner tube: 25 rings of six, grown from the baseplate up
+for (let m = 0; m < 25; m++)for (let j = 0; j < 6; j++) {
+  bead({ ...TAILC, f() { const a = m * TW0 + j * TAU / 6, cs = Math.cos(a), sn = Math.sin(a); hp = [cs * 3.3, ST.Ys - RISE0 * (24 - m + .5), sn * 3.3]; hq = qBasis([-sn, 0, cs], [cs, 0, sn], [0, -1, 0]); }, sc: [2.5, 2.3, 2.25], col: [.80, .78, .70], td: 2.5 + 2.7 * (m / 25) + j * .012, fl: 1.2, ao: .5 });
+}
+// sheath: 23 rings of six
+for (let k = 0; k < NR; k++)for (let j = 0; j < 6; j++) {
+  bead({ ...TAILC, f() { const c = ST.c[k], a = ST.tw[k] + j * TAU / 6, r = 9.6 + 4.2 * c, cs = Math.cos(a), sn = Math.sin(a), tilt = .36 + .5 * c, ct = Math.cos(tilt), sl = Math.sin(tilt); hp = [cs * r, ST.ry[k], sn * r]; const X = [-sn * ct, sl, cs * ct], Y = [cs, 0, sn]; hq = qBasis(X, Y, cross(X, Y)); hs = [4.9 + 1.8 * c, 3.2, 2.35 - .45 * c]; }, sc: [4.9, 3.2, 2.35], col: [.40 + .05 * (k % 2), .60, .60], td: 3.9 + 3.5 * (k / NR) + j * .02, fl: 1.3 });
+}
+// long tail fibres: two half-fibres with a knee, 18 beads each
+for (let i = 0; i < 6; i++)for (let k = 0; k < 18; k++) {
+  const seg = k < 9 ? 0 : 1, tt = ((k % 9) + .5) / 9, fat = (k === 8 || k === 9) ? 2.3 : (k === 0 ? 2.4 : k === 17 ? 2.1 : 1.45 + .35 * ((k * 7) % 3 === 0));
+  bead({ cloud: [70, ASM_Y + 90, -60], r0: 240, r1: 140, f() { const F = ST.fib[i], A = seg ? F.K : F.A, B = seg ? F.T : F.K; const p = lerp3(A, B, tt), q = qFrameY(nrm(sub(B, A)), F.tg); if (F.a >= 1) { hp = p; hq = q; } else { const ps = add(F.C, qRot(F.qs, sub(p, F.K))); hp = lerp3(ps, p, F.a); hp[1] += Math.sin(F.a * Math.PI) * 18; const q2 = qMul(F.qs, q); const d = q2[0] * q[0] + q2[1] * q[1] + q2[2] * q[2] + q2[3] * q[3] < 0 ? -1 : 1; hq = [mix(q2[0], d * q[0], F.a), mix(q2[1], d * q[1], F.a), mix(q2[2], d * q[2], F.a), mix(q2[3], d * q[3], F.a)]; const l = Math.hypot(hq[0], hq[1], hq[2], hq[3]); hq = hq.map(v => v / l); } }, sc: [fat * .88, 5.3, fat * .88], col: [.76, .79, .72], td: 2.4 + i * .55 + (k / 18) * 2.2, fl: 1.3, ao: 0 });
+}
+const NB = beads.length;
+const FIB_STAGE = [...Array(6)].map((_, i) => ({ u: [-285, -215, -150, 175, 240, 300][i], v: 40 + 130 * rnd(), y: 15 + 140 * rnd(), ax: rndDir(), an: .5 + rnd() * 1.4, sp: .1 + .15 * rnd() }));
+const PIN_ORDER = [0, 3, 1, 4, 2, 5];
+const PIN_T = i => 28.5 + PIN_ORDER.indexOf(i) * .32;
+
+// ───────────────────────── the state of the machine at time t
+function stateAt(t) {
+  const s = {};
+  // contraction of the sheath, a wave that starts at the baseplate
+  const tc = cl((t - 32.0) / 1.25); s.c = []; s.ry = []; s.tw = []; let y = 2, tw = 0;
+  for (let k = 0; k < NR; k++) { const c = ease(cl(tc * (NR + 7) - k) / 1) ; const cc = ease(cl((tc * (NR + 7) - k) / 7)); s.c.push(cc); const rise = mix(RISE0, RISE1, cc); s.ry.push(y + rise / 2); s.tw.push(tw); y += rise; tw += mix(TW0, TW1, cc); }
+  s.Ys = y; s.contract = tc;
+  s.b = ease(cl((t - 30.6) / 1.3));
+  // where the tail frame is
+  const d = ease(cl((t - 22.5) / 6)), env = Math.sin(Math.PI * d), calm = 1 - d;
+  const settle = ease(cl((t - 30.5) / 1.4));
+  s.P = [62 * env, mix(ASM_Y, 34, d) + 4 * Math.sin(t * .6) * calm - 24 * settle, -42 * env];
+  s.qP = qMul(qAxis([0, 0, 1], .03 * Math.sin(t * .5) * calm + .26 * env * Math.cos(t * 1.05)), qAxis([1, 0, 0], .03 * Math.sin(t * .37 + 1) * calm + .18 * env * Math.sin(t * .8)));
+  // head frame: off to one side until it joins the tail
+  const e1 = ease(cl((t - 14.9) / 1.6)), e2 = ease(cl((t - 16.4) / 1.1));
+  s.joined = e2; s.hOff = mul(lerp3([105, -40, 10], [0, 26, 0], e1), 1 - e2);
+  s.hO = add([0, s.Ys + 10, 0], s.hOff);
+  // fibres
+  const qPi = qConj(s.qP); s.fib = []; s.pin = [];
+  for (let i = 0; i < 6; i++) {
+    const a = i * TAU / 6, e = [Math.cos(a), 0, Math.sin(a)], tg = [-Math.sin(a), 0, Math.cos(a)];
+    const rb = mix(26.5, 34.5, s.b), A = [e[0] * rb, -4.5, e[2] * rb];
+    const rt = 108 + 7 * Math.sin(t * 1.3 + i * 1.7), yt = -46 + 6 * Math.sin(t * 1.7 + i * 2.3);
+    let T = [e[0] * rt, yt, e[2] * rt];
+    const pin = ease(cl((t - PIN_T(i) + .45) / .45)); s.pin.push(pin);
+    const W = [108 * e[0], Math.sqrt(RC * RC - 108 * 108) - RC + 1.2, 108 * e[2]];
+    if (pin > 0) T = lerp3(T, qRot(qPi, sub(W, s.P)), pin);
+    const dv = sub(T, A), dl = Math.min(len(dv), 139), dn = nrm(dv), Lh = 70;
+    let perp = sub([0, 1, 0], mul(dn, dn[1])); perp = nrm(perp);
+    const K = add(add(A, mul(dn, dl / 2)), mul(perp, Math.sqrt(Lh * Lh - dl * dl / 4)));
+    const fs = FIB_STAGE[i], aa = ease(cl((t - (17.4 + .42 * i)) / 1.3));
+    s.fib.push({ A, K, T: add(A, mul(dn, dl)), tg, a: aa, W, C: [.41 * fs.u - .91 * fs.v + 45, fs.y + 5 * Math.sin(t * .7 + i), -.91 * fs.u - .41 * fs.v], qs: qAxis(fs.ax, fs.an + t * fs.sp) });
+  }
+  // DNA
+  s.pack = t < 8.2 ? 0 : t < 13.3 ? ease(cl((t - 8.2) / 5.1) * .5 + 0) * 2 * 0 + (1 - Math.cos(Math.PI * cl((t - 8.2) / 5.1))) / 2 : 1;
+  s.ext = (t > 7.8 && t < 13.5) ? ss(7.9, 8.4, t) * (1 - s.pack) : 0;
+  s.inj = t < 33.8 ? 0 : (1 - Math.cos(Math.PI * cl((t - 33.8) / 7.4))) / 2;
+  s.spool = t < 30 ? s.pack : 1 - s.inj;
+  s.ghost = Math.max(ss(7.7, 8.5, t) * (1 - ss(13.3, 14.1, t)), ss(33.0, 33.9, t));
+  s.fade = ss(-.6, .3, t) * (1 - ss(DUR - 1.1, DUR - .1, t));
+  return s;
+}
+// camera keys: time, target (tail frame offsets, not rotated), distance, pitch
+const CK = [[0, 55, 80, 0, 640, .16], [7.2, 55, 80, 0, 640, .16], [9.0, 105, 112, 10, 410, .10], [13.3, 105, 112, 10, 410, .10], [15.3, 40, 98, 0, 690, .14], [17.6, 0, 70, 0, 750, .14], [22.4, 0, 70, 0, 750, .16], [27.5, 0, 60, 0, 790, .20], [30.2, 0, 52, 0, 770, .15], [32.3, 0, 28, 0, 720, .12], [34.6, 0, -2, 0, 850, .09], [41.5, 0, -8, 0, 880, .08], [46, 0, -8, 0, 900, .08]];
+function camKey(t) {
+  let i = 0; while (i < CK.length - 2 && t > CK[i + 1][0]) i++;
+  const a = CK[i], b = CK[i + 1], u = ss(a[0], b[0], t);
+  return a.map((v, k) => mix(v, b[k], u));
+}
+
+// ───────────────────────── WebGL
+const cv = document.getElementById('c');
+const gl = cv.getContext('webgl2', { antialias: false, alpha: false, powerPreference: 'high-performance' });
+if (!gl) { document.getElementById('err').style.display = 'flex'; throw new Error('no webgl2'); }
+const HDR = !!gl.getExtension('EXT_color_buffer_float') || !!gl.getExtension('EXT_color_buffer_half_float');
+function prog(vs, fs) {
+  const p = gl.createProgram();
+  for (const [ty, src] of [[gl.VERTEX_SHADER, vs], [gl.FRAGMENT_SHADER, fs]]) { const s = gl.createShader(ty); gl.shaderSource(s, src); gl.compileShader(s); if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) { console.error(gl.getShaderInfoLog(s), src.split('\n').map((l, i) => (i + 1) + ': ' + l).join('\n')); throw new Error('shader'); } gl.attachShader(p, s); }
+  gl.linkProgram(p); if (!gl.getProgramParameter(p, gl.LINK_STATUS)) { console.error(gl.getProgramInfoLog(p)); throw new Error('link'); }
+  const u = {}; const n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS);
+  for (let i = 0; i < n; i++) { const nm = gl.getActiveUniform(p, i).name.replace('[0]', ''); u[nm] = gl.getUniformLocation(p, nm); }
+  return { p, u };
+}
+const COMMON = `
+uniform vec3 uCam,uL; uniform sampler2DShadow uSh; uniform vec2 uRes; uniform float uFogD,uShR;
+vec3 bgc(vec2 uv){ vec2 p=uv-vec2(.5,.57); float r=length(p*vec2(1.,1.3)); vec3 c=mix(vec3(.050,.062,.080),vec3(.004,.006,.010),smoothstep(0.,.95,r)); c+=vec3(.03,.035,.04)*smoothstep(.55,0.,abs(uv.y-.2))*0.; return c; }
+vec3 fog(vec3 c,float d){ float f=1.-exp(-max(d-uFogD,0.)/460.); return mix(c,bgc(gl_FragCoord.xy/uRes),f); }
+const vec2 PD[16]=vec2[16](vec2(.12,.31),vec2(-.45,.18),vec2(.34,-.27),vec2(-.08,-.52),vec2(-.326,-.406),vec2(-.840,-.074),vec2(-.696,.457),vec2(-.203,.621),vec2(.962,-.195),vec2(.473,-.480),vec2(.519,.767),vec2(.185,-.893),vec2(.507,.064),vec2(.896,.412),vec2(-.322,-.933),vec2(-.792,-.598));
+float shadow(vec4 lp){ vec3 p=lp.xyz/lp.w*.5+.5; if(p.x<0.||p.x>1.||p.y<0.||p.y>1.||p.z>1.) return 1.;
+  float a=fract(sin(dot(gl_FragCoord.xy,vec2(12.9898,78.233)))*43758.5453)*6.2832; mat2 r=mat2(cos(a),sin(a),-sin(a),cos(a)); float s=0.;
+  for(int i=0;i<16;i++) s+=texture(uSh,vec3(p.xy+r*PD[i]*uShR,p.z-.0006)); return s/16.; }
+vec3 shade(vec3 alb,vec3 N,vec3 V,float sh,float ao){
+  float ndl=dot(N,uL), nv=max(dot(N,V),0.);
+  float key=smoothstep(-.05,1.,ndl)*sh;
+  vec3 hemi=mix(vec3(.010,.014,.024),vec3(.088,.11,.158),N.y*.5+.5);
+  vec3 H=normalize(uL+V); float sp=pow(max(dot(N,H),0.),42.)*sh*.30;
+  float rim=pow(1.-nv,3.);
+  vec3 c=alb*(hemi*ao+vec3(1.50,1.36,1.15)*key*(.40+.60*ao));
+  c+=vec3(.36,.56,.82)*rim*(.06+.42*ao)*(1.-.6*key)+vec3(1.,.96,.9)*sp;
+  return c; }
+`;
+const VS_BEAD = `#version 300 es
+layout(location=0) in vec3 aP; layout(location=1) in vec3 iPos; layout(location=2) in vec3 iScl; layout(location=3) in vec4 iQ; layout(location=4) in vec4 iCol; layout(location=5) in float iAO;
+uniform mat4 uVP,uLVP; out vec3 vN,vW,vAxis; out vec4 vCol,vL; out float vAO,vLump;
+vec3 qr(vec4 q,vec3 v){return v+2.*cross(q.xyz,cross(q.xyz,v)+q.w*v);}
+void main(){ float sd=float(gl_InstanceID)*.731; float lump=sin(dot(aP,vec3(4.1,3.3,5.2))+sd)*sin(dot(aP,vec3(-3.7,5.1,2.9))+sd*1.3);
+  vec3 sp=aP*(1.+.075*lump); vec3 w=iPos+qr(iQ,sp*iScl); vN=qr(iQ,aP/iScl); vLump=lump; vAxis=qr(iQ,vec3(0,1,0)); vW=w; vCol=iCol; vAO=iAO; vL=uLVP*vec4(w+normalize(vN)*2.2,1.); gl_Position=uVP*vec4(w,1.); }`;
+const FS_BEAD = `#version 300 es
+precision highp float; precision highp sampler2DShadow;
+in vec3 vN,vW,vAxis; in vec4 vCol,vL; in float vAO,vLump; uniform float uGhost; out vec4 o;
+${COMMON}
+void main(){ vec3 N=normalize(vN),V=normalize(uCam-vW); float nv=max(dot(N,V),0.);
+  float ao=mix(1.,.22+.78*smoothstep(-.75,.85,dot(N,normalize(vAxis))),vAO);
+  vec3 c=shade(vCol.rgb*(.9+.16*vLump),N,V,shadow(vL),ao*(.88+.12*vLump));
+  c+=vec3(1.,.62,.26)*vCol.a*.8;
+  float a=1.;
+  if(uGhost>0.){ float f=pow(1.-nv,2.0); vec3 g=vec3(.50,.68,.88)*(.16+1.25*f)+vCol.rgb*.06; c=mix(c,g,uGhost); a=mix(1.,.05+.72*f,uGhost); }
+  o=vec4(fog(c,length(uCam-vW)),a); }`;
+const FS_NONE = `#version 300 es
+precision mediump float; void main(){}`;
+const VS_DNA = `#version 300 es
+layout(location=0) in vec3 aP; layout(location=1) in vec3 aN; layout(location=2) in vec2 aS;
+uniform mat4 uVP,uM; uniform float uTime; out vec3 vN,vW; out vec2 vS;
+void main(){ vec3 p=aP; if(aS.x<0.){ float k=-aS.x; p+=vec3(sin(uTime*1.3+aS.y*.03),0.,cos(uTime*1.1+aS.y*.027))*k*k*30.; }
+  vec4 w=uM*vec4(p,1.); vW=w.xyz; vN=mat3(uM)*aN; vS=aS; gl_Position=uVP*w; }`;
+const FS_DNA = `#version 300 es
+precision highp float; precision highp sampler2DShadow;
+in vec3 vN,vW; in vec2 vS; uniform float uP,uExt,uTime,uDir,uGain,uDeep; out vec4 o;
+${COMMON}
+void main(){ if(vS.x>=0.){ if(vS.x>uP) discard; } else if(-vS.x>uExt) discard;
+  vec3 N=normalize(vN),V=normalize(uCam-vW); float nv=max(dot(N,V),0.);
+  float pulse=.5+.5*sin(vS.y*.085-uTime*7.*uDir); pulse*=pulse;
+  vec3 c=vec3(1.,.42,.08)*(.5+1.3*pulse*abs(uDir))*(.18+.82*nv*nv)+vec3(1.,.7,.35)*pow(1.-nv,3.)*.12;
+  float tip=vS.x>=0.?smoothstep(uP-.006,uP,vS.x):0.; c+=vec3(1.,.6,.25)*tip*2.*abs(uDir); c*=mix(1.,exp(-max(500.-length(vW-vec3(0.,-500.,0.)),0.)/85.),uDeep);
+  o=vec4(fog(c*uGain,length(uCam-vW)),1.); }`;
+const VS_CELL = `#version 300 es
+layout(location=0) in vec3 aP; uniform mat4 uVP,uLVP; uniform vec3 uC; uniform float uR; out vec3 vW; out vec4 vL;
+void main(){ vW=uC+aP*uR; vL=uLVP*vec4(vW+aP*2.5,1.); gl_Position=uVP*vec4(vW,1.); }`;
+const FS_CELL = `#version 300 es
+precision highp float; precision highp sampler2DShadow;
+in vec3 vW; in vec4 vL; uniform vec3 uC; uniform vec4 uPin[6]; uniform float uHole; out vec4 o;
+${COMMON}
+float h3(vec3 p){p=fract(p*.3183099+.1);p*=17.;return fract(p.x*p.y*p.z*(p.x+p.y+p.z));}
+float vn(vec3 x){vec3 i=floor(x),f=fract(x);f=f*f*(3.-2.*f);
+  return mix(mix(mix(h3(i),h3(i+vec3(1,0,0)),f.x),mix(h3(i+vec3(0,1,0)),h3(i+vec3(1,1,0)),f.x),f.y),mix(mix(h3(i+vec3(0,0,1)),h3(i+vec3(1,0,1)),f.x),mix(h3(i+vec3(0,1,1)),h3(i+vec3(1,1,1)),f.x),f.y),f.z);}
+float hf(vec3 p){return vn(p*.028)*.5+vn(p*.075)*.3+vn(p*.2)*.15+vn(p*.52)*.05;}
+void main(){ vec3 N0=normalize(vW-uC); float e=.9,h0=hf(vW);
+  vec3 g=vec3(hf(vW+vec3(e,0,0)),hf(vW+vec3(0,e,0)),hf(vW+vec3(0,0,e)))-h0; g/=e; g-=N0*dot(g,N0);
+  vec3 N=normalize(N0-g*7.5),V=normalize(uCam-vW); float nv=max(dot(N,V),0.);
+  vec3 alb=mix(vec3(.030,.065,.075),vec3(.13,.215,.20),smoothstep(.25,.8,h0));
+  float sh=shadow(vL);
+  vec3 c=shade(alb,N,V,sh,.45+.55*smoothstep(.2,.75,h0));
+  float glow=0.; for(int i=0;i<6;i++){ float d=length(vW-uPin[i].xyz); glow+=uPin[i].w*(exp(-d*d/60.)*1.6+.5*exp(-d*d/700.)); }
+  c+=vec3(1.,.66,.30)*glow;
+  float dh=length(vW.xz); c+=vec3(1.,.6,.25)*uHole*(exp(-dh*dh/90.)*1.2+.25*exp(-dh*dh/2500.));
+  float a=.74+.25*pow(1.-max(dot(N0,V),0.),2.5);
+  o=vec4(fog(c,length(uCam-vW)),a); }`;
+const VS_FS = `#version 300 es
+out vec2 vU; void main(){ vec2 p=vec2(float(gl_VertexID&1),float((gl_VertexID>>1)&1))*4.-1.; vU=p*.5+.5; gl_Position=vec4(p,0.,1.); }`;
+const FS_BG = `#version 300 es
+precision highp float; precision highp sampler2DShadow; in vec2 vU; out vec4 o;
+${COMMON}
+void main(){ o=vec4(bgc(vU),1.); }`;
+const FS_BRIGHT = `#version 300 es
+precision highp float; in vec2 vU; uniform sampler2D uT; uniform vec2 uPx; out vec4 o;
+void main(){ vec3 c=vec3(0.); for(int i=0;i<4;i++){ vec2 d=vec2(float(i&1),float(i>>1))*2.-1.; c+=texture(uT,vU+d*uPx).rgb; } c*=.25;
+  float l=max(c.r,max(c.g,c.b)); c*=smoothstep(.7,1.5,l); o=vec4(c,1.); }`;
+const FS_BLUR = `#version 300 es
+precision highp float; in vec2 vU; uniform sampler2D uT; uniform vec2 uD; out vec4 o;
+void main(){ vec3 c=texture(uT,vU).rgb*.2270; c+=(texture(uT,vU+uD*1.385).rgb+texture(uT,vU-uD*1.385).rgb)*.3162; c+=(texture(uT,vU+uD*3.231).rgb+texture(uT,vU-uD*3.231).rgb)*.0703; o=vec4(c,1.); }`;
+const FS_COMP = `#version 300 es
+precision highp float; in vec2 vU; uniform sampler2D uT,uB; uniform float uTime,uFade; uniform vec2 uRes; out vec4 o;
+vec3 aces(vec3 x){return clamp((x*(2.51*x+.03))/(x*(2.43*x+.59)+.14),0.,1.);}
+float h(vec2 p){vec3 q=fract(vec3(p.xyx)*.1031);q+=dot(q,q.yzx+33.33);return fract((q.x+q.y)*q.z);}
+void main(){ vec3 c=texture(uT,vU).rgb+texture(uB,vU).rgb*.75;
+  vec2 q=vU-.5; c*=1.-.62*smoothstep(.25,.95,length(q*vec2(1.15,1.)));
+  c=aces(c*1.02); c=pow(c,vec3(1./2.2));
+  float g=h(gl_FragCoord.xy+fract(uTime)*311.)-.5; c+=g*.035*(1.-.5*dot(c,vec3(.33)));
+  c=mix(vec3(dot(c,vec3(.3,.59,.11))),c,1.06);
+  o=vec4(c*uFade,1.); }`;
+const VS_PT = `#version 300 es
+layout(location=0) in vec4 aB; uniform mat4 uVP; uniform vec3 uTarget,uCam; uniform float uTime,uFocus,uPx; out float vA;
+void main(){ vec3 box=vec3(1200.); vec3 p=aB.xyz*box+vec3(sin(uTime*.11+aB.w*40.)*16.,uTime*2.4*(.3+aB.w),cos(uTime*.13+aB.w*31.)*16.);
+  vec3 w=uTarget+mod(p-uTarget+box*.5,box)-box*.5; gl_Position=uVP*vec4(w,1.);
+  float d=length(w-uCam); float coc=abs(d-uFocus)/uFocus; float s=1.6+coc*30.*(.5+aB.w); gl_PointSize=s*uPx;
+  vA=(.35+.65*aB.w)*clamp(10./(s*s),.018,.6)*smoothstep(60.,160.,d); }`;
+const FS_PT = `#version 300 es
+precision highp float; in float vA; out vec4 o;
+void main(){ float d=length(gl_PointCoord-.5)*2.; float a=smoothstep(1.,.72,d)*(.7+.3*smoothstep(.5,.95,d))*vA; o=vec4(vec3(.72,.84,1.)*a,1.); }`;
+
+const pBead = prog(VS_BEAD, FS_BEAD), pShadow = prog(VS_BEAD, FS_NONE), pDna = prog(VS_DNA, FS_DNA), pCell = prog(VS_CELL, FS_CELL),
+  pBg = prog(VS_FS, FS_BG), pBright = prog(VS_FS, FS_BRIGHT), pBlur = prog(VS_FS, FS_BLUR), pComp = prog(VS_FS, FS_COMP), pPt = prog(VS_PT, FS_PT);
+
+// meshes
+function icosphere(sub) {
+  const t = (1 + Math.sqrt(5)) / 2; let v = [[-1, t, 0], [1, t, 0], [-1, -t, 0], [1, -t, 0], [0, -1, t], [0, 1, t], [0, -1, -t], [0, 1, -t], [t, 0, -1], [t, 0, 1], [-t, 0, -1], [-t, 0, 1]].map(nrm);
+  let f = [[0, 11, 5], [0, 5, 1], [0, 1, 7], [0, 7, 10], [0, 10, 11], [1, 5, 9], [5, 11, 4], [11, 10, 2], [10, 7, 6], [7, 1, 8], [3, 9, 4], [3, 4, 2], [3, 2, 6], [3, 6, 8], [3, 8, 9], [4, 9, 5], [2, 4, 11], [6, 2, 10], [8, 6, 7], [9, 8, 1]];
+  for (let s = 0; s < sub; s++) { const m = new Map(), nf = []; const mid = (a, b) => { const k = a < b ? a * 4096 + b : b * 4096 + a; if (!m.has(k)) { m.set(k, v.length); v.push(nrm(add(v[a], v[b]))); } return m.get(k); }; for (const [a, b, c] of f) { const ab = mid(a, b), bc = mid(b, c), ca = mid(c, a); nf.push([a, ab, ca], [b, bc, ab], [c, ca, bc], [ab, bc, ca]); } f = nf; }
+  return { v: new Float32Array(v.flat()), i: new Uint16Array(f.flat()) };
+}
+const sph = icosphere(2);
+const STRIDE = 15, inst = new Float32Array(NB * STRIDE);
+const bufSph = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, bufSph); gl.bufferData(gl.ARRAY_BUFFER, sph.v, gl.STATIC_DRAW);
+const bufIdx = gl.createBuffer();
+const bufInst = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, bufInst); gl.bufferData(gl.ARRAY_BUFFER, inst.byteLength, gl.DYNAMIC_DRAW);
+function beadVAO(first) {
+  const vao = gl.createVertexArray(); gl.bindVertexArray(vao);
+  gl.bindBuffer(gl.ARRAY_BUFFER, bufSph); gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, bufIdx); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, sph.i, gl.STATIC_DRAW);
+  gl.bindBuffer(gl.ARRAY_BUFFER, bufInst); const o = first * STRIDE * 4;
+  [[1, 3, 0], [2, 3, 12], [3, 4, 24], [4, 4, 40], [5, 1, 56]].forEach(([l, n, off]) => { gl.enableVertexAttribArray(l); gl.vertexAttribPointer(l, n, gl.FLOAT, false, STRIDE * 4, o + off); gl.vertexAttribDivisor(l, 1); });
+  gl.bindVertexArray(null); return vao;
+}
+const vaoAll = beadVAO(0), vaoRest = beadVAO(N_HEAD);
+
+function tube(pts, sv, arc0, rad, sides) {
+  const n = pts.length, vb = new Float32Array(n * sides * 8), ib = new Uint32Array((n - 1) * sides * 6);
+  let N = null, arc = arc0, total = 0; const arcs = [0];
+  for (let i = 1; i < n; i++) { total += len(sub(pts[i], pts[i - 1])); arcs.push(total); }
+  for (let i = 0; i < n; i++) {
+    const T = nrm(sub(pts[Math.min(i + 1, n - 1)], pts[Math.max(i - 1, 0)]));
+    if (!N) N = nrm(cross(T, Math.abs(T[1]) < .9 ? [0, 1, 0] : [1, 0, 0])); else N = nrm(sub(N, mul(T, dot(N, T))));
+    const B = cross(T, N);
+    for (let k = 0; k < sides; k++) { const a = k * TAU / sides, nr = add(mul(N, Math.cos(a)), mul(B, Math.sin(a))), o = (i * sides + k) * 8; vb[o] = pts[i][0] + nr[0] * rad; vb[o + 1] = pts[i][1] + nr[1] * rad; vb[o + 2] = pts[i][2] + nr[2] * rad; vb[o + 3] = nr[0]; vb[o + 4] = nr[1]; vb[o + 5] = nr[2]; vb[o + 6] = sv(i, arcs[i], total); vb[o + 7] = arcs[i] + arc; }
+    if (i < n - 1) for (let k = 0; k < sides; k++) { const a = i * sides + k, b = i * sides + (k + 1) % sides, c = a + sides, d = b + sides, o = (i * sides + k) * 6; ib[o] = a; ib[o + 1] = c; ib[o + 2] = b; ib[o + 3] = b; ib[o + 4] = c; ib[o + 5] = d; }
+  }
+  const vao = gl.createVertexArray(); gl.bindVertexArray(vao);
+  const b1 = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, b1); gl.bufferData(gl.ARRAY_BUFFER, vb, gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 32, 0); gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 32, 12); gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 2, gl.FLOAT, false, 32, 24);
+  const b2 = gl.createBuffer(); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, b2); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, ib, gl.STATIC_DRAW);
+  gl.bindVertexArray(null); return { vao, n: ib.length };
+}
+// DNA in the head frame: a loose strand outside (s from -1 to 0) and the spool inside (s from 0 to 1)
+const dnaHead = (() => {
+  const pts = [], NE = 90;
+  for (let i = 0; i < NE; i++) { const q = 1 - i / NE; pts.push([Math.sin(q * 4.2) * 40 * q, -q * 250, (Math.cos(q * 3.3) - 1) * 34 * q]); }
+  const iPortal = pts.length; pts.push([0, 0, 0], [0, 3, 0], [0, 6, 0]);
+  const L = HEAD.L, rin = y => Math.max(1.2, Math.min(29.5, 34 * y / HEAD.hcap - 5, 34 * (L - y) / HEAD.hcap - 5));
+  const fl = [.95, .76, .57, .38, .19]; let ang = 0;
+  for (let l = 0; l < fl.length; l++) { const turns = 21, n = turns * 40; for (let k = 0; k <= n; k++) { const u = k / n, y = l % 2 ? mix(L - 9, 9, u) : mix(9, L - 9, u), r = fl[l] * rin(y); ang += TAU / 40; pts.push([Math.cos(ang) * r, y, Math.sin(ang) * r]); } }
+  let aP = 0; for (let i = 1; i <= iPortal; i++)aP += len(sub(pts[i], pts[i - 1]));
+  return tube(pts, (i, a, tot) => i < iPortal ? -(aP - a) / aP : (a - aP) / (tot - aP), -aP, 1.45, 5);
+})();
+// DNA inside the cell, world frame
+const TIP_Y = 10 + YS0 - (NR * (RISE0 - RISE1)) - RISE0 * 24.5 - 3;
+const dnaCell = (() => {
+  const pts = [], n = 1500;
+  for (let i = 0; i <= n; i++) { const q = i / n, A = (70 + 50 * q) * ss(0, .12, q); pts.push([A * (.75 * Math.sin(q * 41.1) + .35 * Math.sin(q * 97.3 + 1)), TIP_Y - 100 * (1 - Math.exp(-5 * q)) + A * .34 * Math.sin(q * 53.3 + 2) - 22 * q, A * (.75 * Math.sin(q * 35.7 + .5) + .35 * Math.sin(q * 83.1))]); }
+  return tube(pts, (i, a, tot) => a / tot, 0, 1.6, 6);
+})();
+// the cell: a cap of a sphere
+const cell = (() => {
+  const NY = 72, NX = 144, v = [], idx = [];
+  for (let y = 0; y <= NY; y++) { const th = 1.45 * Math.pow(y / NY, 1.4); for (let x = 0; x <= NX; x++) { const ph = x / NX * TAU; v.push(Math.sin(th) * Math.cos(ph), Math.cos(th), Math.sin(th) * Math.sin(ph)); } }
+  for (let y = 0; y < NY; y++)for (let x = 0; x < NX; x++) { const a = y * (NX + 1) + x, b = a + 1, c = a + NX + 1, d = c + 1; idx.push(a, b, c, b, d, c); }
+  const vao = gl.createVertexArray(); gl.bindVertexArray(vao);
+  const b1 = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, b1); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(v), gl.STATIC_DRAW); gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+  const b2 = gl.createBuffer(); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, b2); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(idx), gl.STATIC_DRAW);
+  gl.bindVertexArray(null); return { vao, n: idx.length };
+})();
+const NPT = 420, pts = (() => { const a = new Float32Array(NPT * 4); for (let i = 0; i < a.length; i++)a[i] = rnd(); const vao = gl.createVertexArray(); gl.bindVertexArray(vao); const b = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, b); gl.bufferData(gl.ARRAY_BUFFER, a, gl.STATIC_DRAW); gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 4, gl.FLOAT, false, 0, 0); gl.bindVertexArray(null); return vao; })();
+const vaoEmpty = gl.createVertexArray();
+
+// render targets
+const SHN = 2048;
+const shTex = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, shTex); gl.texImage2D(gl.TEXTURE_2D, 0, gl.DEPTH_COMPONENT24, SHN, SHN, 0, gl.DEPTH_COMPONENT, gl.UNSIGNED_INT, null);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_COMPARE_MODE, gl.COMPARE_REF_TO_TEXTURE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_COMPARE_FUNC, gl.LEQUAL);
+const shFbo = gl.createFramebuffer(); gl.bindFramebuffer(gl.FRAMEBUFFER, shFbo); gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, shTex, 0); gl.drawBuffers([gl.NONE]); gl.readBuffer(gl.NONE);
+let RT = null, W = 0, H = 0, scale = 1, useHDR = HDR;
+function colorTex(w, h) { const t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t); if (useHDR) gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, w, h, 0, gl.RGBA, gl.HALF_FLOAT, null); else gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE); return t; }
+function texFbo(w, h) { const t = colorTex(w, h), f = gl.createFramebuffer(); gl.bindFramebuffer(gl.FRAMEBUFFER, f); gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, t, 0); return { t, f, w, h }; }
+function makeRT() {
+  if (RT) { gl.deleteFramebuffer(RT.ms); gl.deleteRenderbuffer(RT.rc); gl.deleteRenderbuffer(RT.rd);[RT.res, RT.a, RT.b].forEach(x => { gl.deleteTexture(x.t); gl.deleteFramebuffer(x.f); }); }
+  const samples = Math.min(4, gl.getParameter(gl.MAX_SAMPLES));
+  const ms = gl.createFramebuffer(), rc = gl.createRenderbuffer(), rd = gl.createRenderbuffer();
+  gl.bindRenderbuffer(gl.RENDERBUFFER, rc); gl.renderbufferStorageMultisample(gl.RENDERBUFFER, samples, useHDR ? gl.RGBA16F : gl.RGBA8, W, H);
+  gl.bindRenderbuffer(gl.RENDERBUFFER, rd); gl.renderbufferStorageMultisample(gl.RENDERBUFFER, samples, gl.DEPTH_COMPONENT24, W, H);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, ms); gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.RENDERBUFFER, rc); gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, rd);
+  if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE && useHDR) { useHDR = false; RT = null; return makeRT(); }
+  const bw = Math.max(2, W >> 2), bh = Math.max(2, H >> 2);
+  RT = { ms, rc, rd, res: texFbo(W, H), a: texFbo(bw, bh), b: texFbo(bw, bh) };
+}
+let cssW = 0, cssH = 0, dpr = 1;
+function resize(force) {
+  cssW = innerWidth; cssH = innerHeight; dpr = Math.min(devicePixelRatio || 1, 2);
+  const w = Math.max(2, Math.round(cssW * dpr * scale)), h = Math.max(2, Math.round(cssH * dpr * scale));
+  if (w !== W || h !== H || force) { W = w; H = h; cv.width = W; cv.height = H; makeRT(); }
+}
+{ const px = innerWidth * innerHeight * Math.pow(Math.min(devicePixelRatio || 1, 2), 2); scale = Math.min(1, Math.sqrt(3.4e6 / px)); }
+resize(true); addEventListener('resize', () => resize());
+
+// ───────────────────────── interface
+let t = FREEZE !== null ? cl(FREEZE, 0, DUR - .001) : 0, playing = FREEZE === null, scrubbing = false, labelsOn = QS.get('labels') !== '0';
+let uYaw = 0, uPitch = 0, uZoom = 1, pYaw = 0, pPitch = 0, mYaw = 0, mPitch = 0, dragging = false, lx = 0, ly = 0, idle = 0;
+cv.addEventListener('pointerdown', e => { dragging = true; lx = e.clientX; ly = e.clientY; cv.setPointerCapture(e.pointerId); cv.classList.add('drag'); });
+cv.addEventListener('pointermove', e => { if (dragging) { uYaw -= (e.clientX - lx) * .006; uPitch += (e.clientY - ly) * .0045; lx = e.clientX; ly = e.clientY; } mYaw = -(e.clientX / innerWidth - .5) * .16; mPitch = (e.clientY / innerHeight - .5) * .07; });
+const endDrag = () => { dragging = false; cv.classList.remove('drag'); }; cv.addEventListener('pointerup', endDrag); cv.addEventListener('pointercancel', endDrag);
+cv.addEventListener('wheel', e => { e.preventDefault(); uZoom = cl(uZoom * Math.exp(e.deltaY * .0012), .35, 1.9); }, { passive: false });
+const $ = id => document.getElementById(id);
+const STAGES = [
+  [0, 'Head and tail', 'Copies of one protein lock into a shell of hexamers, with pentamers at the corners. Beside it the tail grows up from its baseplate: inner tube first, then the sheath.'],
+  [7.9, 'DNA packing', 'A motor on the portal uses ATP to feed the double-stranded DNA genome into the empty head.'],
+  [13.6, 'Head meets tail', 'The motor leaves, neck proteins attach to the portal, and the finished head joins the finished tail.'],
+  [17.4, 'Tail fibres', 'Six long tail fibres, built separately, attach to the baseplate last.'],
+  [22.5, 'Landing', 'The complete virus drifts until it meets an Escherichia coli cell.'],
+  [28.3, 'Pinning', 'The tips of the long fibres bind the cell surface and hold the baseplate over it.'],
+  [30.5, 'Contraction', 'The baseplate opens, the sheath contracts and drives the rigid inner tube through the cell envelope.'],
+  [33.6, 'Injection', 'The DNA leaves the head through the tube and enters the cell. The protein shell stays outside.']];
+const bar = $('bar'), tn = [];
+STAGES.forEach(([ts, name], i) => { const k = document.createElement('div'); k.className = 'tk'; k.style.left = (ts / DUR * 100) + '%'; bar.appendChild(k); const n = document.createElement('div'); n.className = 'tn'; n.textContent = name; n.style.left = (ts / DUR * 100) + '%'; if (i === 6) n.style.top = '32px'; bar.appendChild(n); tn.push(n); });
+const scrubTo = e => { const r = bar.getBoundingClientRect(); t = cl((e.clientX - r.left) / r.width) * (DUR - .01); };
+bar.addEventListener('pointerdown', e => { scrubbing = true; bar.setPointerCapture(e.pointerId); scrubTo(e); });
+bar.addEventListener('pointermove', e => { if (scrubbing) scrubTo(e); });
+bar.addEventListener('pointerup', () => scrubbing = false); bar.addEventListener('pointercancel', () => scrubbing = false);
+const setPlay = p => { playing = p; $('bPlay').textContent = p ? 'Pause' : 'Play'; }; setPlay(playing);
+$('bPlay').onclick = () => setPlay(!playing);
+const setLab = v => { labelsOn = v; $('bLab').textContent = v ? 'Labels on' : 'Labels off'; $('bLab').classList.toggle('on', v); }; setLab(labelsOn);
+$('bLab').onclick = () => setLab(!labelsOn);
+addEventListener('keydown', e => { if (e.code === 'Space') { e.preventDefault(); setPlay(!playing); } else if (e.key === 'l' || e.key === 'L') setLab(!labelsOn); else if (e.key === 'ArrowRight') t = Math.min(DUR - .01, t + 1); else if (e.key === 'ArrowLeft') t = Math.max(0, t - 1); });
+
+// labels: [text, side, show(t), anchor(st) -> world point, offset along camera right]
+const hW = (s, p) => add(s.P, qRot(s.qP, add(s.hO, p))), tW = (s, p) => add(s.P, qRot(s.qP, p));
+const LABELS = [
+  ['Head (capsid)', 1, t => t > 3.2, s => hW(s, [0, 84, 0]), 41],
+  ['Portal', -1, t => t > .6 && t < 5.4, s => hW(s, [0, 1, 0]), 7],
+  ['Packaging motor', 1, t => t > 8.3 && t < 13.3, s => hW(s, [0, -5, 0]), 11],
+  ['DNA', -1, t => t > 8.5 && t < 12.6, s => hW(s, [0, -60 * (1 - s.pack) - 16, 0]), 5],
+  ['Neck, collar and whiskers', -1, t => t > 14.8, s => hW(s, [0, -5, 0]), 12],
+  ['Inner tube', -1, t => t > 3.2 && t < 6.4, s => tW(s, [0, cl((t - 2.5) / 2.7) * 96 - 4, 0]), 4],
+  ['Sheath', 1, t => t > 5.6, s => tW(s, [0, s.Ys * .5, 0]), s => 12 + 4 * s.contract],
+  ['Baseplate', -1, t => t > 2.4, s => tW(s, [0, -5, 0]), s => 27 + 8 * s.b],
+  ['Long tail fibre', 1, t => t > 20.2, s => { let b = 0, bv = -1e9; for (let i = 0; i < 6; i++) { const v = dot(qRot(s.qP, s.fib[i].K), s.right); if (v > bv) { bv = v; b = i; } } return tW(s, s.fib[b].K); }, 2],
+  ['Inner tube', -1, t => t > 33.4, s => tW(s, [0, -30, 0]), 5],
+  ['DNA', 1, t => t > 35.2, s => [8, TIP_Y - 62, 0], 26],
+  ['Escherichia coli', 1, t => t > 27.2, s => add([0, -RC, 0], mul(nrm(add(add([0, RC, 0], mul(s.right, 215)), mul(s.toCam, 150))), RC)), 0]];
+const lbEl = LABELS.map(([txt]) => { const d = document.createElement('div'); d.className = 'lb r'; d.innerHTML = '<i></i><b></b><span></span>'; d.lastChild.textContent = txt; $('labels').appendChild(d); return d; });
+
+// sound: nothing is created before the button is pressed
+let AC = null, master = null, packOsc = null, packGain = null, sndOn = false, lastBlip = 0;
+function soundInit() {
+  AC = new (window.AudioContext || window.webkitAudioContext)(); master = AC.createGain(); master.gain.value = .7; master.connect(AC.destination);
+  const lp = AC.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 380; lp.connect(master);
+  [[55, .11, 'triangle'], [82.6, .06, 'sine'], [110.3, .035, 'sine']].forEach(([f, g, ty]) => { const o = AC.createOscillator(), a = AC.createGain(); o.type = ty; o.frequency.value = f; a.gain.value = g; o.connect(a).connect(lp); o.start(); });
+  packOsc = AC.createOscillator(); packOsc.type = 'sawtooth'; packOsc.frequency.value = 90; const bp = AC.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 620; bp.Q.value = 3; packGain = AC.createGain(); packGain.gain.value = 0; packOsc.connect(bp).connect(packGain).connect(master); packOsc.start();
+}
+function blip(f, g, d, ty) { if (!sndOn) return; const o = AC.createOscillator(), a = AC.createGain(), n = AC.currentTime; o.type = ty || 'sine'; o.frequency.setValueAtTime(f, n); if (ty === 'drop') { o.type = 'sine'; o.frequency.exponentialRampToValueAtTime(f * .28, n + d); } a.gain.setValueAtTime(g, n); a.gain.exponentialRampToValueAtTime(1e-4, n + d); o.connect(a).connect(master); o.start(n); o.stop(n + d + .03); }
+$('bSnd').onclick = () => { if (!AC) soundInit(); sndOn = !sndOn; if (sndOn) AC.resume(); master.gain.setTargetAtTime(sndOn ? .7 : 0, AC.currentTime, .05); $('bSnd').textContent = sndOn ? 'Mute sound' : 'Enable sound'; $('bSnd').classList.toggle('on', sndOn); };
+function soundFrame(t0, t1, s) {
+  if (!sndOn || !playing) { if (packGain) packGain.gain.setTargetAtTime(0, AC.currentTime, .05); return; }
+  if (t1 > t0 && t1 - t0 < .2) {
+    let n = 0; for (const b of beads) if (b.td > t0 && b.td <= t1) n++;
+    if (n && AC.currentTime - lastBlip > .028) { lastBlip = AC.currentTime; blip(1300 + Math.random() * 1900, .018 + .004 * Math.min(n, 4), .05); }
+    for (let i = 0; i < 6; i++) { if (PIN_T(i) > t0 && PIN_T(i) <= t1) blip(420 + i * 37, .09, .35); const fa = 17.4 + .42 * i + 1.2; if (fa > t0 && fa <= t1) blip(700, .06, .16); }
+    if (32.0 > t0 && 32.0 <= t1) { blip(170, .55, .9, 'drop'); blip(95, .3, 1.2, 'drop'); }
+    if (17.4 > t0 && 17.4 <= t1) blip(240, .2, .4, 'drop');
+  }
+  const act = (t1 > 8.2 && t1 < 13.3) ? 1 : (t1 > 33.8 && t1 < 41.2) ? -1 : 0;
+  packGain.gain.setTargetAtTime(act ? .05 : 0, AC.currentTime, .08);
+  packOsc.frequency.setTargetAtTime(act > 0 ? 80 + 150 * s.pack : 230 - 150 * s.inj, AC.currentTime, .05);
+}
+
+// ───────────────────────── frame
+let last = performance.now(), fAcc = 0, fN = 0, slow = 0, shown = -1;
+window.__stats = { fps: 0, ms: 0, scale, W, H, frames: 0 };
+function frame(now) {
+  requestAnimationFrame(frame);
+  const dtReal = Math.min((now - last) / 1000, .1); last = now;
+  fAcc += dtReal; fN++; window.__stats.frames++;
+  if (fN >= 40) { const ms = fAcc / fN * 1000; window.__stats.ms = ms; window.__stats.fps = 1000 / ms; if (ms > 20.5) slow++; else slow = 0; if (slow >= 2 && scale > .45) { scale = Math.max(.45, scale * .85); slow = 0; resize(); } window.__stats.scale = scale; window.__stats.W = W; window.__stats.H = H; fAcc = 0; fN = 0; }
+  const t0 = t;
+  if (playing && !scrubbing) { t += dtReal; if (t >= DUR) t = 0; }
+  if (FREEZE === null) idle += dtReal;
+  const s = ST = stateAt(t);
+
+  // beads
+  const hO = s.hO, P = s.P, qP = s.qP;
+  for (let i = 0; i < NB; i++) {
+    const b = beads[i]; hs = null;
+    if (b.f) b.f(); else { hp = [hO[0] + b.lp[0], hO[1] + b.lp[1], hO[2] + b.lp[2]]; hq = b.lq; }
+    const r = qRot(qP, hp); let x = P[0] + r[0], y = P[1] + r[1], z = P[2] + r[2]; let q = qMul(qP, hq); const sc = hs || b.sc;
+    let e = cl((t - (b.td - b.fl)) / b.fl); e = ease(e); let gone = 0; if (t > b.tl) { gone = ease(cl((t - b.tl) / b.fl)); e *= 1 - gone; }
+    let k = 1, fl = 0;
+    if (e < 1) {
+      const S = b.S, sw = Math.sin(Math.PI * e), w = t * .5 + b.ph;
+      x = mix(S[0] + 7 * Math.sin(w), x, e) + b.sw[0] * sw; y = mix(S[1] + 7 * Math.sin(w * 1.3 + 1), y, e) + b.sw[1] * sw; z = mix(S[2] + 7 * Math.cos(w * .9), z, e) + b.sw[2] * sw;
+      const sq = qMul(qAxis([0, 1, 0], t * .4 + b.ph), b.sq), d = sq[0] * q[0] + sq[1] * q[1] + sq[2] * q[2] + sq[3] * q[3] < 0 ? -1 : 1;
+      q = [mix(sq[0], d * q[0], e), mix(sq[1], d * q[1], e), mix(sq[2], d * q[2], e), mix(sq[3], d * q[3], e)]; const l = Math.hypot(q[0], q[1], q[2], q[3]); q[0] /= l; q[1] /= l; q[2] /= l; q[3] /= l;
+      k = (.78 + .22 * e) * Math.max(.02, 1 - gone * gone);
+    } else if (t >= b.td && t < b.tl) fl = Math.exp(-(t - b.td) * 3.2) * .85;
+    const o = i * STRIDE;
+    inst[o] = x; inst[o + 1] = y; inst[o + 2] = z; inst[o + 3] = sc[0] * k; inst[o + 4] = sc[1] * k; inst[o + 5] = sc[2] * k;
+    inst[o + 6] = q[0]; inst[o + 7] = q[1]; inst[o + 8] = q[2]; inst[o + 9] = q[3];
+    inst[o + 10] = b.col[0]; inst[o + 11] = b.col[1]; inst[o + 12] = b.col[2]; inst[o + 13] = fl; inst[o + 14] = b.ao * e;
+  }
+  gl.bindBuffer(gl.ARRAY_BUFFER, bufInst); gl.bufferSubData(gl.ARRAY_BUFFER, 0, inst);
+
+  // camera
+  pYaw += (mYaw - pYaw) * Math.min(1, dtReal * 5); pPitch += (mPitch - pPitch) * Math.min(1, dtReal * 5);
+  const ck = camKey(t); let tgt = add(P, [ck[1], ck[2], ck[3]]), dist = ck[4], pitch = ck[5];
+  if (VIEW === 'head') { tgt = hW(s, [0, 60, 0]); dist = 300; }
+  else if (VIEW === 'tail') { tgt = tW(s, [0, 45, 0]); dist = 300; }
+  else if (VIEW === 'baseplate') { tgt = tW(s, [0, -6, 0]); dist = 250; pitch = -.32; }
+  else if (VIEW === 'top') { tgt = tW(s, [0, 110, 0]); dist = 640; pitch = 1.25; }
+  else if (VIEW === 'wide') { dist *= 1.6; }
+  else if (VIEW === 'side') { pitch = .03; }
+  else if (VIEW === 'whole') { tgt = tW(s, [0, 100, 0]); dist = 640; pitch = .12; }
+  dist *= uZoom * Math.max(1, 1.45 / (cssW / cssH) * .78);
+  const lim = VIEW === 'baseplate' ? -.6 : .015; uPitch = cl(uPitch, lim - pitch, 1.45 - pitch); pitch = cl(pitch + uPitch + pPitch, lim, 1.5);
+  const yaw = .55 + t * .045 + idle * .012 + uYaw + pYaw;
+  const cam = add(tgt, mul([Math.cos(pitch) * Math.sin(yaw), Math.sin(pitch), Math.cos(pitch) * Math.cos(yaw)], dist));
+  const view = lookAt(cam, tgt, [0, 1, 0]), proj = persp(30 * Math.PI / 180, W / H, 8, 6000), VP = mmul(proj, view);
+  const right = [view[0], view[4], view[8]]; s.right = right; s.toCam = [Math.sin(yaw), 0, Math.cos(yaw)];
+  // key light rides with the camera: upper left, slightly in front
+  const Ld = nrm([Math.cos(yaw) * -.62 + Math.sin(yaw) * .42, .74, -Math.sin(yaw) * -.62 + Math.cos(yaw) * .42]);
+  const sc0 = add(P, [22 * (1 - s.joined), 92, 0]), SS = 340, LVP = mmul(ortho(-SS, SS, -SS, SS, 10, 1700), lookAt(add(sc0, mul(Ld, 850)), sc0, [0, 1, 0]));
+
+  gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL); gl.depthMask(true); gl.disable(gl.BLEND);
+  // shadow pass
+  gl.bindFramebuffer(gl.FRAMEBUFFER, shFbo); gl.viewport(0, 0, SHN, SHN); gl.clear(gl.DEPTH_BUFFER_BIT);
+  gl.enable(gl.CULL_FACE); gl.cullFace(gl.FRONT);
+  gl.useProgram(pShadow.p); gl.uniformMatrix4fv(pShadow.u.uVP, false, LVP);
+  gl.bindVertexArray(vaoAll); gl.drawElementsInstanced(gl.TRIANGLES, sph.i.length, gl.UNSIGNED_SHORT, 0, NB);
+  gl.cullFace(gl.BACK);
+
+  // scene
+  gl.bindFramebuffer(gl.FRAMEBUFFER, RT.ms); gl.viewport(0, 0, W, H); gl.clearColor(0, 0, 0, 1); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, shTex);
+  const common = p => { gl.useProgram(p.p); gl.uniform3fv(p.u.uCam, cam); gl.uniform3fv(p.u.uL, Ld); gl.uniform1i(p.u.uSh, 0); gl.uniform2f(p.u.uRes, W, H); gl.uniform1f(p.u.uFogD, dist + 70); gl.uniform1f(p.u.uShR, 3.3 / (2 * SS)); if (p.u.uVP) gl.uniformMatrix4fv(p.u.uVP, false, VP); if (p.u.uLVP) gl.uniformMatrix4fv(p.u.uLVP, false, LVP); };
+  gl.disable(gl.DEPTH_TEST); common(pBg); gl.bindVertexArray(vaoEmpty); gl.drawArrays(gl.TRIANGLES, 0, 3); gl.enable(gl.DEPTH_TEST);
+  const ghost = s.ghost > .003;
+  common(pBead); gl.uniform1f(pBead.u.uGhost, 0);
+  if (ghost) { gl.bindVertexArray(vaoRest); gl.drawElementsInstanced(gl.TRIANGLES, sph.i.length, gl.UNSIGNED_SHORT, 0, NB - N_HEAD); }
+  else { gl.bindVertexArray(vaoAll); gl.drawElementsInstanced(gl.TRIANGLES, sph.i.length, gl.UNSIGNED_SHORT, 0, NB); }
+  // DNA
+  gl.disable(gl.CULL_FACE);
+  if (ghost || s.ext > 0) {
+    common(pDna); gl.uniformMatrix4fv(pDna.u.uM, false, mFromQT(qP, hW(s, [0, 0, 0]))); gl.uniform1f(pDna.u.uTime, t); gl.uniform1f(pDna.u.uP, s.spool); gl.uniform1f(pDna.u.uExt, s.ext);
+    const moving = (t > 8.2 && t < 13.3) ? 1 : (t > 33.8 && t < 41.2) ? -1 : 0; gl.uniform1f(pDna.u.uDir, moving); gl.uniform1f(pDna.u.uGain, .8); gl.uniform1f(pDna.u.uDeep, 0);
+    gl.bindVertexArray(dnaHead.vao); gl.drawElements(gl.TRIANGLES, dnaHead.n, gl.UNSIGNED_INT, 0);
+  }
+  if (s.inj > 0) {
+    common(pDna); gl.uniformMatrix4fv(pDna.u.uM, false, mFromQT([0, 0, 0, 1], [0, 0, 0])); gl.uniform1f(pDna.u.uTime, t); gl.uniform1f(pDna.u.uP, s.inj); gl.uniform1f(pDna.u.uExt, 0); gl.uniform1f(pDna.u.uDir, t < 41.2 ? 1 : .35); gl.uniform1f(pDna.u.uGain, 7.5); gl.uniform1f(pDna.u.uDeep, 1);
+    gl.bindVertexArray(dnaCell.vao); gl.drawElements(gl.TRIANGLES, dnaCell.n, gl.UNSIGNED_INT, 0);
+  }
+  gl.enable(gl.CULL_FACE);
+  // cell
+  if (P[1] < 520 || uPitch > .1 || VIEW !== 'auto') {
+    common(pCell); gl.uniform3f(pCell.u.uC, 0, -RC, 0); gl.uniform1f(pCell.u.uR, RC);
+    const pins = new Float32Array(24); for (let i = 0; i < 6; i++) { const w = s.fib[i].W, pt = PIN_T(i); pins.set([w[0], w[1], w[2], t > pt ? .22 + 1.5 * Math.exp(-(t - pt) * 2.2) : 0], i * 4); }
+    gl.uniform4fv(pCell.u.uPin, pins); gl.uniform1f(pCell.u.uHole, s.contract * (.35 + .65 * (s.inj > 0 && s.inj < 1 ? 1 : 0)));
+    gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    gl.bindVertexArray(cell.vao); gl.drawElements(gl.TRIANGLES, cell.n, gl.UNSIGNED_SHORT, 0);
+    gl.disable(gl.BLEND);
+  }
+  // ghost head: depth first, then the nearest surface only
+  if (ghost) {
+    common(pBead); gl.uniform1f(pBead.u.uGhost, s.ghost); gl.bindVertexArray(vaoAll);
+    gl.colorMask(false, false, false, false); gl.drawElementsInstanced(gl.TRIANGLES, sph.i.length, gl.UNSIGNED_SHORT, 0, N_HEAD); gl.colorMask(true, true, true, true);
+    gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA); gl.depthMask(false);
+    gl.drawElementsInstanced(gl.TRIANGLES, sph.i.length, gl.UNSIGNED_SHORT, 0, N_HEAD); gl.depthMask(true); gl.disable(gl.BLEND);
+  }
+  // dust
+  gl.useProgram(pPt.p); gl.uniformMatrix4fv(pPt.u.uVP, false, VP); gl.uniform3fv(pPt.u.uTarget, tgt); gl.uniform3fv(pPt.u.uCam, cam); gl.uniform1f(pPt.u.uTime, t + idle); gl.uniform1f(pPt.u.uFocus, dist); gl.uniform1f(pPt.u.uPx, H / 1080);
+  gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE); gl.depthMask(false); gl.bindVertexArray(pts); gl.drawArrays(gl.POINTS, 0, NPT); gl.depthMask(true); gl.disable(gl.BLEND);
+
+  // resolve and post
+  gl.bindFramebuffer(gl.READ_FRAMEBUFFER, RT.ms); gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, RT.res.f); gl.blitFramebuffer(0, 0, W, H, 0, 0, W, H, gl.COLOR_BUFFER_BIT, gl.NEAREST);
+  gl.disable(gl.DEPTH_TEST); gl.disable(gl.CULL_FACE); gl.bindVertexArray(vaoEmpty);
+  const pass = (p, src, dst, w, h) => { gl.bindFramebuffer(gl.FRAMEBUFFER, dst); gl.viewport(0, 0, w, h); gl.useProgram(p.p); gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, src); gl.uniform1i(p.u.uT, 0); };
+  pass(pBright, RT.res.t, RT.a.f, RT.a.w, RT.a.h); gl.uniform2f(pBright.u.uPx, 1 / W, 1 / H); gl.drawArrays(gl.TRIANGLES, 0, 3);
+  for (let i = 0; i < 2; i++) {
+    pass(pBlur, RT.a.t, RT.b.f, RT.a.w, RT.a.h); gl.uniform2f(pBlur.u.uD, (1 + i) / RT.a.w, 0); gl.drawArrays(gl.TRIANGLES, 0, 3);
+    pass(pBlur, RT.b.t, RT.a.f, RT.a.w, RT.a.h); gl.uniform2f(pBlur.u.uD, 0, (1 + i) / RT.a.h); gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+  pass(pComp, RT.res.t, null, W, H); gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, RT.a.t); gl.uniform1i(pComp.u.uB, 1); gl.uniform1f(pComp.u.uTime, now / 1000); gl.uniform1f(pComp.u.uFade, s.fade); gl.uniform2f(pComp.u.uRes, W, H); gl.drawArrays(gl.TRIANGLES, 0, 3);
+  gl.activeTexture(gl.TEXTURE0);
+
+  // labels and captions
+  const placed = [];
+  for (let i = 0; i < LABELS.length; i++) {
+    const L = LABELS[i], el = lbEl[i]; let on = labelsOn && L[2](t) && s.fade > .6;
+    if (on) {
+      let w = L[3](s), side = L[1]; if (side === 0) side = dot(sub(w, tgt), right) >= 0 ? 1 : -1;
+      w = add(w, mul(right, side * (typeof L[4] === 'function' ? L[4](s) : L[4])));
+      const cx = VP[0] * w[0] + VP[4] * w[1] + VP[8] * w[2] + VP[12], cy = VP[1] * w[0] + VP[5] * w[1] + VP[9] * w[2] + VP[13], cw = VP[3] * w[0] + VP[7] * w[1] + VP[11] * w[2] + VP[15];
+      if (cw <= 0) on = false; else { const x = (cx / cw * .5 + .5) * cssW, y = (1 - (cy / cw * .5 + .5)) * cssH; el.style.transform = `translate(${x.toFixed(1)}px,${y.toFixed(1)}px)`; el.className = 'lb ' + (side > 0 ? 'r' : 'l'); if (x < 40 || x > cssW - 40 || y < 60 || y > cssH - 150) on = false;
+        else { const tw = el.lastChild.offsetWidth + 70, x0 = side > 0 ? x : x - tw, x1 = side > 0 ? x + tw : x; let dy = 0; for (const r of placed) if (x0 < r[1] && x1 > r[0] && Math.abs(y + dy - r[2]) < 17) dy = r[2] + 17 - y; placed.push([x0, x1, y + dy]); el.lastChild.style.top = (dy - 8) + 'px'; } }
+    }
+    el.style.opacity = on ? 1 : 0;
+  }
+  let si = 0; for (let i = 0; i < STAGES.length; i++)if (t >= STAGES[i][0]) si = i;
+  if (si !== shown) { shown = si; $('cap').firstChild.textContent = STAGES[si][1]; $('cap').lastChild.textContent = STAGES[si][2]; tn.forEach((n, i) => n.classList.toggle('on', i === si)); }
+  $('fill').style.width = (t / DUR * 100) + '%'; $('knob').style.left = (t / DUR * 100) + '%';
+  soundFrame(t0, t, s);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
